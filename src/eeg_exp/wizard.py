@@ -1,0 +1,196 @@
+from __future__ import annotations
+
+import statistics
+import sys
+import time
+
+EMOTIV_VENDOR_IDS = {0x1234, 0xED02, 0x21A1}
+
+PHYSICAL_CHECKLIST = """\
+Physical setup checklist - Emotiv EPOC 1.0
+------------------------------------------
+1. Charge the headset.
+   Mini-USB port is on the back of the headband. First charge takes about
+   6 hours. The headset LED turns off when fully charged.
+
+2. Hydrate the felt pads.
+   Each of the 16 felt pads (14 EEG + 2 reference) must be soaked in saline
+   solution. Multipurpose contact lens solution works well. Squeeze out the
+   excess so the pads are damp, not dripping.
+
+3. Assemble the sensors.
+   Snap each saline-soaked felt pad into its gold sensor housing, then click
+   each sensor into a numbered socket on the headset arm. The two reference
+   sensors (CMS / DRL) go on the rubber arms that sit behind your earlobes.
+
+4. Insert the USB dongle into your Mac.
+   Use the dongle that came in the same box as the headset - they are
+   factory-paired and not interchangeable.
+
+5. Power on the headset.
+   Slide the switch on the back-left of the headband. The LED behind the
+   switch should glow solid (not blinking). The dongle LED should also go
+   solid once it sees the headset.
+
+6. Put the headset on.
+   AF3 / AF4 sit on your forehead just above the eyebrows. The two rubber
+   arms with reference sensors clip behind your earlobes. Adjust the band
+   until every sensor is in firm but comfortable contact with your scalp.
+"""
+
+
+def _enumerate_emotiv() -> list[dict]:
+    import hid
+
+    matches = []
+    for d in hid.enumerate():
+        vid = d.get("vendor_id")
+        product = (d.get("product_string") or "").lower()
+        manuf = (d.get("manufacturer_string") or "").lower()
+        if vid in EMOTIV_VENDOR_IDS or "emotiv" in product or "emotiv" in manuf:
+            matches.append(d)
+    return matches
+
+
+def _looks_sane(values: list[list[float]]) -> tuple[bool, str]:
+    flat = [v for sample in values for v in sample]
+    if not flat:
+        return False, "no samples"
+    mean = statistics.mean(flat)
+    stdev = statistics.pstdev(flat)
+    if stdev < 1e-3:
+        return False, f"flat (mean={mean:.1f}, stdev={stdev:.4f})"
+    if mean < 100 or mean > 32000:
+        return False, f"out of expected range (mean={mean:.1f})"
+    return True, f"mean={mean:.1f} stdev={stdev:.1f}"
+
+
+def _try_capture(
+    is_research: bool, n: int = 32, timeout_s: float = 8.0
+) -> tuple[list[list[float]], list[list[int]], int | None, str | None]:
+    from emokit.emotiv import Emotiv
+
+    from .reader import CHANNELS
+
+    samples: list[list[float]] = []
+    qualities: list[list[int]] = []
+    battery: int | None = None
+    try:
+        deadline = time.time() + timeout_s
+        with Emotiv(display_output=False, is_research=is_research) as headset:
+            while len(samples) < n and time.time() < deadline:
+                packet = headset.dequeue()
+                if packet is None:
+                    time.sleep(0.005)
+                    continue
+                samples.append(
+                    [float(packet.sensors[c]["value"]) for c in CHANNELS]
+                )
+                qualities.append(
+                    [int(packet.sensors[c]["quality"]) for c in CHANNELS]
+                )
+                battery = int(packet.battery)
+    except Exception as e:
+        return samples, qualities, battery, f"{type(e).__name__}: {e}"
+    return samples, qualities, battery, None
+
+
+def _step(n: int, total: int, label: str) -> None:
+    print(f"[{n}/{total}] {label}", flush=True)
+
+
+def run(skip_checklist: bool = False) -> int:
+    from .reader import CHANNELS
+
+    total = 5
+
+    if not skip_checklist:
+        print(PHYSICAL_CHECKLIST)
+        try:
+            input("Press Enter once everything above is done (Ctrl+C to abort)... ")
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return 1
+        print()
+
+    _step(1, total, "checking python deps")
+    try:
+        import hid  # noqa: F401
+        import emokit  # noqa: F401
+        import Crypto  # noqa: F401
+    except ImportError as e:
+        print(f"  FAIL: {e}")
+        print("  fix: pip install -e .")
+        return 1
+    print("  ok")
+
+    _step(2, total, "scanning USB HID devices for Emotiv dongle")
+    devs = _enumerate_emotiv()
+    if not devs:
+        print("  FAIL: no Emotiv-like HID device found")
+        print("  fix: plug the dongle in. verify the OS sees it with:")
+        print("    system_profiler SPUSBDataType | grep -i -A4 emotiv")
+        return 1
+    for d in devs:
+        print(
+            f"  found: VID={d['vendor_id']:#06x} PID={d['product_id']:#06x} "
+            f"product={d.get('product_string')!r} "
+            f"manuf={d.get('manufacturer_string')!r}"
+        )
+
+    _step(3, total, "trying consumer AES key schema (8s capture window)")
+    samples, qualities, battery, err = _try_capture(is_research=False)
+    if err:
+        print(f"  ERROR: {err}")
+    if not samples:
+        print("  FAIL: dongle is visible but no packets arrived")
+        print("  fix:")
+        print("   - power on the headset (switch on back-left); LED must be solid")
+        print(f"   - grant Input Monitoring to your terminal AND to:")
+        print(f"     {sys.executable}")
+        print("     in System Settings > Privacy & Security > Input Monitoring")
+        print("   - quit any EmotivPRO / Xavier / Emotiv Control Panel apps")
+        return 1
+    sane, detail = _looks_sane(samples)
+    print(f"  got {len(samples)} packets; {detail}")
+
+    schema = "consumer"
+    if not sane:
+        _step(4, total, "values look unsound; retrying with research schema")
+        samples_r, qualities_r, battery_r, err_r = _try_capture(is_research=True)
+        if err_r:
+            print(f"  ERROR: {err_r}")
+        sane_r, detail_r = _looks_sane(samples_r)
+        print(f"  research schema: {detail_r}")
+        if sane_r:
+            samples, qualities, battery = samples_r, qualities_r, battery_r
+            schema = "research"
+            sane = True
+        else:
+            print("  FAIL: neither schema produces sane values")
+            print("  likely causes:")
+            print("   - dongle/headset pair mismatch (do not mix dongles)")
+            print("   - unit uses a non-standard key derivation")
+            print("  open an issue with your headset serial prefix and a hex dump")
+            print("  of one raw HID report.")
+            return 1
+    else:
+        _step(4, total, "schema validation")
+        print("  consumer schema PASSED")
+
+    _step(5, total, "summary")
+    last_q = qualities[-1] if qualities else [0] * len(CHANNELS)
+    q_line = " ".join(f"{c}={q}" for c, q in zip(CHANNELS, last_q))
+    print(f"  schema:   {schema}")
+    print(
+        f"  battery:  {battery}%"
+        if battery is not None
+        else "  battery:  unknown"
+    )
+    print(f"  contacts: {q_line}    (0 = worst, 4 = best)")
+    print()
+    print("ready. next:")
+    prefix = "" if schema == "consumer" else "--research "
+    print(f"  eeg-exp {prefix}verify --count 50")
+    print(f"  eeg-exp {prefix}stream --lsl --osc")
+    return 0

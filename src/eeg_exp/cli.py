@@ -16,6 +16,12 @@ def cmd_verify(args: argparse.Namespace) -> None:
             break
 
 
+def cmd_wizard(args: argparse.Namespace) -> None:
+    from .wizard import run
+
+    raise SystemExit(run(skip_checklist=args.no_checklist))
+
+
 def cmd_stream(args: argparse.Namespace) -> None:
     if not (args.lsl or args.osc):
         raise SystemExit("pass --lsl and/or --osc to select an outlet")
@@ -45,6 +51,12 @@ def main() -> None:
     p.add_argument("--research", action="store_true",
                    help="use research-edition AES key schema (default: consumer)")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    w = sub.add_parser("wizard",
+                       help="interactive connection check + setup checklist")
+    w.add_argument("--no-checklist", action="store_true",
+                   help="skip the physical-setup preamble and Enter prompt")
+    w.set_defaults(func=cmd_wizard)
 
     v = sub.add_parser("verify", help="print N raw samples to stdout")
     v.add_argument("--count", type=int, default=20)

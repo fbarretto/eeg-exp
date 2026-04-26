@@ -66,7 +66,27 @@ running. Their background services grab the HID interface exclusively.
 
 ## Usage
 
-Verify the headset is decrypting correctly (prints 20 raw samples):
+### Connection wizard
+
+The first thing to run. It prints a physical-setup checklist (charging,
+saline, sensor placement, dongle, power) and then runs end-to-end
+diagnostics: HID enumeration, dongle detection, AES key-schema selection,
+sanity check on the decrypted values, battery, and per-channel contact
+quality.
+
+```bash
+eeg-exp wizard
+```
+
+Skip the checklist preamble once you know the drill:
+
+```bash
+eeg-exp wizard --no-checklist
+```
+
+### Verify
+
+Confirm the headset is decrypting correctly (prints 20 raw samples):
 
 ```bash
 eeg-exp verify
