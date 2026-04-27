@@ -81,21 +81,28 @@ CHOP.
 2. TD auto-creates a docked Text DAT named `script1_callbacks` next to it.
    Open that DAT.
 3. Replace its contents with [`openepoc_chop.py`](openepoc_chop.py).
-4. The script handles continuous cooking on its own. TD's default cook model
-   is on-demand: a Script CHOP without inputs would cook once at startup
-   and never again. The script works around this two ways automatically:
+4. **Click the "Setup Parameters" button** on the Script CHOP. It's in the
+   operator's parameter panel — `Script` tab. This triggers the
+   `onSetupParameters` callback, which adds a custom `Tick` parameter
+   bound to `absTime.seconds`. That expression re-evaluates every frame
+   and forces the Script CHOP to cook every frame, even with no inputs.
 
-   - **`onGetCookLevel` callback** returning `CookLevel.ALWAYS` — the
-     documented primary method on modern TD builds.
-   - **Hidden `Tick` custom parameter** bound to `absTime.seconds` — creates
-     a per-frame dependency that forces cooking on any TD build, including
-     older versions that don't expose `CookLevel`.
+   You only need to click this once per Script CHOP. After it's clicked,
+   the `Tick` page appears on the operator and the CHOP cooks continuously.
 
-   You don't need to wire any inputs or drop a downstream Trail CHOP unless
-   you want one for visualization. (If you do drop a Trail CHOP, that also
-   forces cooking, just via a different mechanism.)
+   *Why this is needed*: a Script CHOP with no inputs cooks once at startup
+   on TD's default scheduler. The `absTime.seconds` parameter dependency
+   is the documented workaround. The script also implements
+   `onGetCookLevel` returning `CookLevel.ALWAYS` for newer TD builds, but
+   the `Tick` parameter is the bulletproof fallback.
 
 5. Channels (`AF3`, `F7`, ..., `AF4`) should now update live at ~128 Hz.
+
+   If you still see all-zero values after clicking Setup Parameters,
+   either the `Tick` page didn't get created (paste was wrong, or
+   `ParMode.EXPRESSION` failed) or the reader thread hasn't started.
+   Drop a `Trail CHOP` after `script1` as a manual override — Trail
+   CHOPs cook every frame and force their inputs to cook too.
 
 **If you accidentally created a Script DAT**: errors will mention
 `td.scriptDAT` and look like `'td.scriptDAT' object has no attribute 'rate'`.

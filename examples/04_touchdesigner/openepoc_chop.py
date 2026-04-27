@@ -59,16 +59,23 @@ def _start_reader_once() -> None:
 
 
 def onSetupParameters(scriptOp):
-    # Add a hidden 'tick' parameter bound to absTime.seconds. The expression
-    # re-evaluates every frame, creating a dependency that forces the Script
-    # CHOP to cook each frame even though it has no operator inputs. This is
-    # the canonical workaround documented on the Derivative forum.
+    # Add a 'Tick' parameter whose default expression is absTime.seconds.
+    # absTime.seconds advances every frame, the parameter re-evaluates,
+    # the dependency forces the Script CHOP to cook every frame.
+    # IMPORTANT: this only runs when you click "Setup Parameters" in the
+    # Script CHOP's parameter panel, not when this DAT is edited.
     try:
         page = scriptOp.appendCustomPage("Tick")
-        p = page.appendFloat("Tick")[0]
-        p.expr = "absTime.seconds"
-    except Exception:
-        pass
+        result = page.appendFloat("Tick", label="Tick")
+        p = result[0] if isinstance(result, (list, tuple)) else result
+        p.default = 0.0
+        p.defaultExpr = "absTime.seconds"
+        p.defaultMode = ParMode.EXPRESSION
+    except Exception as e:
+        # If something goes wrong, surface it on next cook.
+        global _reader_error
+        if _reader_error is None:
+            _reader_error = f"onSetupParameters failed: {e}"
 
 
 def onGetCookLevel(scriptOp):
