@@ -65,7 +65,7 @@ def onCook(scriptOp):
 
     if _reader_error:
         scriptOp.clear()
-        scriptOp.error(_reader_error)
+        scriptOp.addError(_reader_error)
         return
 
     samples = []
